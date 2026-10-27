@@ -39,8 +39,6 @@ Write-Host "Installing core dependencies..." -ForegroundColor Cyan
 
 Write-Host ""
 Write-Host "Setup complete." -ForegroundColor Green
-Write-Host "Optional packages for transformer embeddings can be installed with:" -ForegroundColor Green
-Write-Host ".\.venv\Scripts\python.exe -m pip install -r requirements-optional.txt" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Green
 Write-Host "1. Copy .env.example to .env and add your Groq API key." -ForegroundColor Green

@@ -3,7 +3,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Iterable, List, Optional
 
 from langchain_core.documents import Document
 
@@ -239,6 +239,44 @@ class QdrantKnowledgeBase:
                 )
             )
 
+        return documents
+
+    def documents_for_source(self, source_name: str) -> List[Document]:
+        """Return every indexed chunk that belongs to one source name.
+
+        Used by the retriever when a multi-source query is missing a source
+        entirely, so it can add that source's own chunks instead of reading
+        the client's private point list.
+        """
+        documents = []
+        next_offset = None
+        while True:
+            points, next_offset = self.client.scroll(
+                collection_name=self.collection_name,
+                limit=200,
+                offset=next_offset,
+                with_payload=True,
+            )
+            for point in points:
+                payload = point.payload or {}
+                if payload.get("source_name") != source_name:
+                    continue
+                metadata = dict(payload.get("metadata") or {})
+                metadata.setdefault("source", payload.get("source_name", "Unknown"))
+                if payload.get("page") is not None:
+                    metadata.setdefault("page", payload.get("page"))
+                metadata["source_id"] = payload.get("source_id")
+                metadata["chunk_index"] = payload.get("chunk_index")
+                documents.append(
+                    Document(
+                        page_content=payload.get("text", ""),
+                        metadata=metadata,
+                    )
+                )
+            if next_offset is None:
+                break
+
+        documents.sort(key=lambda doc: doc.metadata.get("chunk_index") or 0)
         return documents
 
     def list_sources(self) -> List[dict]:

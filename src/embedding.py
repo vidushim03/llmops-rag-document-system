@@ -2,7 +2,7 @@ import hashlib
 import math
 from typing import List
 
-from langchain.embeddings.base import Embeddings
+from langchain_core.embeddings import Embeddings
 
 
 class TFIDFEmbeddings(Embeddings):
@@ -46,7 +46,11 @@ def get_embeddings(mode="tfidf"):
         return TFIDFEmbeddings(dim=384)
 
     try:
-        from langchain_community.embeddings import HuggingFaceEmbeddings
+        try:
+            from langchain_huggingface import HuggingFaceEmbeddings
+        except ImportError:
+            # Older installs only have the community re-export.
+            from langchain_community.embeddings import HuggingFaceEmbeddings
 
         print("Using Transformer embeddings")
         return HuggingFaceEmbeddings(

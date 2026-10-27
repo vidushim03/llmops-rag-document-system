@@ -1,11 +1,17 @@
+import html
 import json
 import os
+import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import streamlit as st
-import streamlit.components.v1 as components
 from langchain_core.documents import Document
 
 from src.chunker import chunk_data
@@ -14,11 +20,16 @@ from src.embedding import get_embeddings
 from src.agent import stream_agent
 from src.ocr_loader import load_image_text, load_pdf_with_ocr
 from src.session_store import SessionVectorStore
+from llmops.guardrails import LLMGuardrails
+from llmops.semantic_evaluator import SemanticRAGEvaluator
+from llmops.telemetry import LLMOpsTelemetry
+from llmops.text_utils import is_non_answer
 
 
 APP_DIR = Path(__file__).resolve().parent
 CHAT_FILE = APP_DIR / "chats.json"
 LEGACY_CHAT_FILE = APP_DIR / "chat_history.json"
+EVAL_CORPUS_PATH = APP_DIR / "llmops" / "data" / "eval_corpus.json"
 CHATS_STORAGE_KEY = "rag_chats_v1"
 CHATS_BRIDGE_PARAM = "st_chats_bridge"
 
@@ -451,8 +462,13 @@ def load_chats():
 
 
 def save_chats():
-    with CHAT_FILE.open("w", encoding="utf-8") as file:
-        json.dump(st.session_state.all_chats, file, indent=2, ensure_ascii=False)
+    # Write atomically: a crash mid-write must not truncate the whole history.
+    tmp = CHAT_FILE.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps(st.session_state.all_chats, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    tmp.replace(CHAT_FILE)
 
 
 def create_chat(title="New Chat", messages=None):
@@ -462,6 +478,9 @@ def create_chat(title="New Chat", messages=None):
         "messages": list(messages or []),
     }
     st.session_state.current_chat = chat_id
+    # The draft uploader no longer exists once the draft becomes a real chat.
+    # Clearing its signature stops the next draft from silently reusing it.
+    st.session_state.chat_upload_sigs.pop("draft", None)
     save_chats()
     return chat_id
 
@@ -510,6 +529,8 @@ def migrate_legacy_history():
 
     messages = []
     for item in legacy_items:
+        if not isinstance(item, dict):
+            continue
         question = str(item.get("question", "")).strip()
         answer = str(item.get("answer", "")).strip()
 
@@ -536,6 +557,64 @@ def get_document_store():
     if chat_id is None and st.session_state.draft_store is not None:
         return st.session_state.draft_store
     return None
+
+
+def build_eval_corpus_store():
+    """Build a store from the shared corpus the sidebar chats were replayed on.
+
+    Without this, reopening a replayed chat and asking a follow-up would run as
+    a document-free chat: the answers would have no retrieved context and the
+    turn would be excluded from the RAG aggregates. Loading the same corpus
+    keeps those follow-ups grounded in the documents the transcript cites.
+    """
+    try:
+        corpus = json.loads(EVAL_CORPUS_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    if not isinstance(corpus, dict) or not corpus:
+        return None
+
+    store = SessionVectorStore(get_embeddings(mode="transformer"))
+    for doc_id, passage in corpus.items():
+        text = str(passage or "").strip()
+        if text:
+            store.add_documents(
+                [Document(page_content=text, metadata={"source": doc_id})],
+                source_name=doc_id,
+            )
+    return store if store.source_count() > 0 else None
+
+
+def ensure_llmops_state():
+    """Create the evaluator and telemetry logger once per session."""
+    if "llmops_telemetry" not in st.session_state:
+        st.session_state.llmops_eval = SemanticRAGEvaluator(min_faithfulness=0.50)
+        st.session_state.llmops_telemetry = LLMOpsTelemetry("llmops/reports/telemetry_audit_log.jsonl")
+    return st.session_state.llmops_eval, st.session_state.llmops_telemetry
+
+
+def fit_drift_baseline(evaluator):
+    """Fit the drift centroid on the documents currently in this chat.
+
+    Keyed on the chat id plus a content signature, so switching chats or
+    replacing a document without changing its chunk count still refits. When the
+    active chat has no documents the baseline is dropped, otherwise drift would
+    keep reporting the previous chat's centroid as a real measurement.
+    """
+    store = get_document_store()
+    chat_key = st.session_state.current_chat or "draft"
+    texts = store.all_texts() if store is not None else []
+    signature = (chat_key, len(texts), sum(len(text) for text in texts))
+
+    if not texts:
+        if st.session_state.get("llmops_baseline_signature") is not None:
+            evaluator.reset_baseline()
+            st.session_state.llmops_baseline_signature = None
+        return
+
+    if st.session_state.get("llmops_baseline_signature") != signature:
+        evaluator.fit_baseline_corpus(texts)
+        st.session_state.llmops_baseline_signature = signature
 
 
 def render_copy_button(text):
@@ -653,6 +732,7 @@ with st.sidebar:
         st.session_state.current_chat = None
         st.session_state.draft_messages = []
         st.session_state.draft_store = None
+        st.session_state.chat_upload_sigs.pop("draft", None)
         st.rerun()
 
     st.markdown('<div class="side-title">Chats</div>', unsafe_allow_html=True)
@@ -673,6 +753,7 @@ with st.sidebar:
                 if st.button("✕", key=f"del_{chat_id}", help="Delete chat", use_container_width=True):
                     st.session_state.all_chats.pop(chat_id, None)
                     st.session_state.chat_stores.pop(chat_id, None)
+                    st.session_state.chat_upload_sigs.pop(chat_id, None)
                     save_chats()
                     if st.session_state.current_chat == chat_id:
                         st.session_state.current_chat = None
@@ -694,6 +775,19 @@ with st.sidebar:
         st.caption("PDF · Word · Text · CSV · Images")
 
     store = get_document_store()
+    if store is None and st.session_state.current_chat:
+        chat_meta = st.session_state.all_chats.get(st.session_state.current_chat) or {}
+        if chat_meta.get("corpus"):
+            corpus_name = Path(chat_meta["corpus"]).name
+            st.caption(f"This transcript was replayed against {corpus_name}.")
+            if st.button("Load shared corpus for follow-ups", use_container_width=True):
+                with st.spinner("Loading shared corpus..."):
+                    corpus_store = build_eval_corpus_store()
+                if corpus_store is not None:
+                    st.session_state.chat_stores[st.session_state.current_chat] = corpus_store
+                    st.rerun()
+                else:
+                    st.error("The shared evaluation corpus could not be loaded.")
     if store and store.source_count() > 0:
         total_chunks = sum(s["chunk_count"] for s in store.list_sources())
         st.markdown(
@@ -723,7 +817,7 @@ with st.sidebar:
 
 if uploaded_files:
     sig_key = st.session_state.current_chat or "draft"
-    current_signature = tuple((file.name, file.size) for file in uploaded_files)
+    current_signature = tuple(sorted((file.name, file.size) for file in uploaded_files))
     if st.session_state.chat_upload_sigs.get(sig_key) != current_signature:
         with st.spinner("Processing documents..."):
             processed = process_files(uploaded_files)
@@ -743,7 +837,10 @@ if uploaded_files:
                     result = store.add_documents(chunks, source_name=source)
                     total_chunks += result.get("chunk_count", 0)
 
-            st.session_state.chat_upload_sigs[sig_key] = current_signature
+                # Only remember the signature after a successful ingest, so a
+                # failed upload (e.g. a missing loader dependency) can be
+                # retried by re-uploading the same file.
+                st.session_state.chat_upload_sigs[sig_key] = current_signature
             st.rerun()
 if st.session_state.current_chat is None:
     chat = {"title": "New Chat", "messages": st.session_state.draft_messages}
@@ -768,9 +865,10 @@ if not messages:
 for message in messages:
     avatar = "user" if message["role"] == "user" else "assistant"
     with st.chat_message(message["role"], avatar=avatar):
-        st.markdown(message["content"])
+        clean_content = message["content"].replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+        st.markdown(clean_content)
         if message["role"] == "assistant":
-            render_copy_button(message["content"])
+            render_copy_button(clean_content)
 
 pending_query = st.session_state.pop("pending_query", None)
 query = st.chat_input("Ask a question about your documents")
@@ -778,12 +876,75 @@ if pending_query and not query:
     query = pending_query
 
 if query:
+    # --- LLMOps Guardrail: validate/sanitize input before RAG ---
+    if "llmops_guard" not in st.session_state:
+        st.session_state.llmops_guard = LLMGuardrails(block_injections=True, mask_pii=True)
+    is_safe, sanitized_query, g_audit = st.session_state.llmops_guard.validate_input(query)
+    if not is_safe:
+        st.error(f"🚫 Request blocked by guardrail: {sanitized_query}")
+        messages.append({"role": "user", "content": query})
+        messages.append({"role": "assistant", "content": sanitized_query})
+        if st.session_state.current_chat is None:
+            blocked_chat_id = create_chat(title=generate_title(query), messages=messages)
+            if st.session_state.draft_store is not None:
+                st.session_state.chat_stores[blocked_chat_id] = st.session_state.draft_store
+                st.session_state.draft_store = None
+            st.session_state.draft_messages = []
+        else:
+            st.session_state.all_chats[st.session_state.current_chat] = chat
+            save_chats()
+
+        # Log blocked requests too. Otherwise the dashboard's guardrail counters
+        # would read zero even while attacks were being stopped, and the blocked
+        # turn would silently vanish from the audit trail.
+        try:
+            evaluator, telemetry = ensure_llmops_state()
+            fit_drift_baseline(evaluator)
+            drift_flag, drift_similarity = evaluator.detect_semantic_query_drift(query)
+            active_store = get_document_store()
+            mode = "rag" if active_store is not None and active_store.source_count() > 0 else "chat"
+            telemetry.log_interaction(
+                question=query,
+                response=sanitized_query,
+                context_count=0,
+                latency_ms=0.0,
+                eval_metrics={
+                    "faithfulness": None,
+                    "answer_relevance": None,
+                    "context_precision": None,
+                    "rag_composite_quality": None,
+                    "hallucination_detected": None,
+                    "semantic_query_drift": drift_flag,
+                    "drift_similarity_to_corpus": drift_similarity,
+                    "passed_quality_gate": None,
+                    "skipped_reason": "guardrail_blocked",
+                },
+                guardrail_audit=g_audit,
+                model_name=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
+                mode=mode,
+                is_answer=False,
+                retrieved_context=[],
+                tags={
+                    "chat_id": st.session_state.current_chat or "draft",
+                    "source": "streamlit",
+                    "blocked": True,
+                },
+            )
+        except Exception as exc:
+            print(f"[telemetry] blocked turn could not be logged: {exc}", file=sys.stderr)
+            st.warning(f"The blocked turn could not be added to the LLMOps audit log: {exc}")
+        st.rerun()
+    query = sanitized_query
+
     history = build_chat_history(messages)
     messages.append({"role": "user", "content": query})
 
     with st.chat_message("user", avatar="user"):
         st.markdown(query)
 
+    t0 = time.time()
+    output_redacted = False
+    out_audit = {}
     with st.chat_message("assistant", avatar="assistant"):
         store = get_document_store()
         has_kb = store is not None and store.source_count() > 0
@@ -800,24 +961,37 @@ if query:
             collected = []
             def display_generator():
                 for token in answer_generator():
-                    collected.append(token)
-                    yield token
+                    # Clean out stray raw HTML line breaks emitted by models
+                    sanitized_token = token.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+                    collected.append(sanitized_token)
+                    yield sanitized_token
             st.write_stream(display_generator())
             collected_text = "".join(collected).strip()
             answer = collected_text if collected_text else "Sorry, no answer was generated."
         except Exception as exc:
             st.error(f"Could not generate an answer. Check GROQ_API_KEY. ({exc})")
             answer = "Sorry, I could not generate an answer."
+
+        # Redact PII the model may have reproduced from a document before the
+        # answer is stored in chat history or the audit log. Streaming means the
+        # raw text is briefly visible, so rerun below to re-render the sanitized
+        # transcript when a redaction actually happened.
+        _, safe_answer, out_audit = st.session_state.llmops_guard.validate_output(answer)
+        if out_audit.get("output_pii_detected"):
+            output_redacted = True
+            answer = safe_answer
+            st.warning(
+                "The answer contained PII, so it was redacted before being saved "
+                "to the chat and the LLMOps audit log."
+            )
+
         local_sources = {}
-        web_used = False
         for doc in source_docs:
             meta = doc.metadata or {}
             src = meta.get("source")
             page = meta.get("page")
-            
-            if src == "web_search":
-                web_used = True
-            elif src:
+
+            if src:
                 if src not in local_sources:
                     local_sources[src] = set()
                 if page is not None:
@@ -831,28 +1005,116 @@ if query:
                     page_str = f" (Page{'s' if len(pages) > 1 else ''} {', '.join(sorted_pages)})"
                 else:
                     page_str = ""
-                chip_htmls.append(f'<span class="cite-chip">📄 {src}{page_str}</span>')
+                chip_htmls.append(
+                    f'<span class="cite-chip">📄 {html.escape(str(src))}{html.escape(page_str)}</span>'
+                )
             
             chips = "".join(chip_htmls)
             st.markdown(f'<div class="cite-row">{chips}</div>', unsafe_allow_html=True)
-        elif web_used:
-            st.caption("Answer included web search results.")
 
         render_copy_button(answer)
 
     messages.append({"role": "assistant", "content": answer})
+
+    # Create the chat before logging so the audit row carries the real chat id
+    # instead of the temporary "draft" id. The first turn used to be orphaned.
+    new_chat_id = None
     if st.session_state.current_chat is None:
-        create_chat(title=generate_title(query), messages=messages)
+        new_chat_id = create_chat(title=generate_title(query), messages=messages)
         if st.session_state.draft_store is not None:
-            st.session_state.chat_stores[st.session_state.current_chat] = st.session_state.draft_store
+            st.session_state.chat_stores[new_chat_id] = st.session_state.draft_store
             st.session_state.draft_store = None
         st.session_state.draft_messages = []
+        chat = st.session_state.all_chats[new_chat_id]
+
+    # --- Real-Time LLMOps Automatic Telemetry Logging ---
+    try:
+        evaluator, telemetry = ensure_llmops_state()
+        # Fit the out-of-domain baseline on the documents actually ingested in
+        # this session, so drift is a real measurement against real corpus text
+        # rather than a hardcoded reference set.
+        fit_drift_baseline(evaluator)
+
+        latency_ms = (time.time() - t0) * 1000
+        ctx_chunks = [d.page_content for d in source_docs] if source_docs else []
+        # Keep the audit from the original input. Re-validating the sanitized
+        # query would erase the PII/injection signal the guardrail just found.
+        # Merge in the output audit so PII reproduced by the model is counted too.
+        guardrail_audit = {**g_audit, **out_audit}
+
+        # Only evaluated, grounded document answers count toward the real RAG
+        # hallucination rate. Refusals, empty answers, and conversational filler
+        # are still logged as document-chat turns but excluded from aggregates.
+        is_answer = bool(ctx_chunks) and bool(answer) and not is_non_answer(answer)
+        active_store = get_document_store()
+        mode = "rag" if active_store is not None and active_store.source_count() > 0 else "chat"
+
+        if is_answer:
+            eval_metrics = st.session_state.llmops_eval.evaluate_turn(query, answer, ctx_chunks)
+        else:
+            # Nothing was answered from documents, so every quality metric stays
+            # null. Drift is still a real measurement of the question itself
+            # (or null when no document baseline exists yet).
+            drift_flag, drift_similarity = st.session_state.llmops_eval.detect_semantic_query_drift(query)
+            eval_metrics = {
+                "faithfulness": None,
+                "answer_relevance": None,
+                "context_precision": None,
+                "rag_composite_quality": None,
+                "hallucination_detected": None,
+                "semantic_query_drift": drift_flag,
+                "drift_similarity_to_corpus": drift_similarity,
+                "passed_quality_gate": None,
+                "skipped_reason": "no_document_context_or_refusal",
+            }
+
+        # Persist the actual chunks behind the answer so the turn can be
+        # inspected (and re-scored) later from the observability dashboard.
+        retrieved_context = []
+        for doc in (source_docs or [])[:8]:
+            meta = getattr(doc, "metadata", {}) or {}
+            retrieved_context.append(
+                {
+                    "source": meta.get("source") or meta.get("source_name") or "unknown",
+                    "page": meta.get("page"),
+                    "text": doc.page_content,
+                }
+            )
+
+        st.session_state.llmops_telemetry.log_interaction(
+            question=query,
+            response=answer,
+            context_count=len(ctx_chunks),
+            latency_ms=latency_ms,
+            eval_metrics=eval_metrics,
+            guardrail_audit=guardrail_audit,
+            model_name=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
+            mode=mode,
+            is_answer=is_answer,
+            retrieved_context=retrieved_context,
+            tags={
+                "chat_id": st.session_state.current_chat or "draft",
+                "source": "streamlit",
+            },
+        )
+    except Exception as exc:
+        # Never let a telemetry failure break the conversation, but never hide
+        # it either: a silent pass would make missing metrics look like zeros.
+        print(f"[telemetry] turn could not be logged: {exc}", file=sys.stderr)
+        st.warning(f"This turn could not be added to the LLMOps audit log: {exc}")
+
+    if new_chat_id is not None:
+        # create_chat already persisted the transcript; rerun so the sidebar
+        # and the sanitized history render from the saved chat.
         st.rerun()
     else:
         if chat["title"] == "New Chat":
             chat["title"] = generate_title(query)
         st.session_state.all_chats[st.session_state.current_chat] = chat
         save_chats()
+        if output_redacted:
+            # Replace the briefly streamed raw answer with the sanitized one.
+            st.rerun()
 
 render_chat_persistence_bridge()
 persist_chats_localstorage()

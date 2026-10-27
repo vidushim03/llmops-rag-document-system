@@ -9,7 +9,7 @@ from src.embedding import get_embeddings
 from src.agent import run_agent
 from src.knowledge_base import QdrantKnowledgeBase
 from src.ocr_loader import load_pdf_with_ocr
-from src.retriever import retrieve_docs
+from llmops.guardrails import LLMGuardrails
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -88,6 +88,8 @@ def main():
     print("\nQdrant knowledge base ready.")
     print("Type 'exit' to quit.\n")
 
+    guard = LLMGuardrails(block_injections=True, mask_pii=True)
+
     while True:
         try:
             query = input("Question: ").strip()
@@ -101,14 +103,23 @@ def main():
         if query.lower() == "exit":
             break
 
+        is_safe, sanitized_query, _audit = guard.validate_input(query)
+        if not is_safe:
+            print("\nBlocked by guardrail:", sanitized_query)
+            continue
+
         start = time.time()
 
         try:
-            agent_result = run_agent(query, kb)
+            agent_result = run_agent(sanitized_query, kb)
             answer = agent_result.get("generation", "Sorry, I could not generate an answer.")
         except Exception as exc:
             print(f"\nError: {exc}")
             continue
+
+        _, answer, output_audit = guard.validate_output(answer)
+        if output_audit.get("output_pii_detected"):
+            print("(PII in the model output was redacted.)")
 
         end = time.time()
         print("\nAnswer:", answer)

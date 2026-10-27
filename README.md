@@ -1,110 +1,157 @@
-# RAG PDF Project
+# LLMOps: Production RAG Evaluation, Guardrails & Observability Platform
 
-This app now uses a persistent Qdrant-backed knowledge base instead of temporary upload-only indexing.
+[![LLMOps CI/CD Quality Gate](https://img.shields.io/badge/CI%2FCD-Quality%20Gate%20Passing-success)](.github/workflows/llmops_ci.yml)
+[![MLOps Track](https://img.shields.io/badge/AIM4142-Fast%20Learners%20Project-blue)]()
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
 
-## What changed
+> Academic Research Project for **AIM4142 Machine Learning Operations (MLOps)**
+>
+> **School of Computer Science and Engineering, Manipal University Jaipur**
 
-- Documents are stored in Qdrant and remain available across sessions.
-- Re-uploading the same filename replaces the older version in the active embedding mode.
-- You can query the saved knowledge base from both the Streamlit app and the CLI.
-- Local Qdrant mode works without running a separate Qdrant server.
+---
 
-## Windows setup
+## 🚀 Overview
 
-1. Install Python 3.11 or newer and enable `Add python.exe to PATH`.
-2. Open PowerShell in this folder.
-3. Run:
+This repository extends an Agentic Retrieval-Augmented Generation (RAG) system with an enterprise-grade **LLMOps Architecture**, addressing four critical production failure modes:
+1. **Hallucination & Faithfulness Drift Detection** using the formal **RAG Triad** framework.
+2. **Pre-Retrieval & Post-Generation Safety Guardrails** (Adversarial Prompt Injections & PII Masking).
+3. **Real-time Observability & Telemetry** (Estimated token usage, estimated cost, and P95 latency monitoring).
+4. **Automated CI/CD Quality Gates** with GitHub Actions preventing degraded models from deploying.
+
+---
+
+## 📁 Repository Structure
+
+```
+llmops-rag-document-system/
+├── llmops/
+│   ├── guardrails.py              # Prompt Injection & PII Sanitization Engine
+│   ├── semantic_evaluator.py      # RAG Triad scoring used by the live app
+│   ├── telemetry.py               # Latency, Estimated Token Cost & Observability Logging
+│   ├── test_quality_gate.py       # CI/CD Automated Unit Test Suite
+│   ├── run_regression_experiment.py # Retrieval benchmark + regression gate
+│   └── reports/
+│       └── telemetry_audit_log.jsonl    # Append-only Production Audit Trail
+├── scripts/
+│   ├── run_live_eval.py           # Real PDF evaluation run
+│   └── replay_chats.py            # Replays sidebar chats against one shared corpus
+├── .github/workflows/
+│   └── llmops_ci.yml              # GitHub Actions Automated CI/CD Workflow
+├── src/                           # Core LangGraph RAG Agent Codebase
+├── chats.json                     # 20 real sidebar chats (replayed transcripts)
+├── PROJECT_REPORT_AIM4142.md      # Full Academic Project Report for Submission
+└── README.md                      # Documentation & Instructions
+```
+
+---
+
+## ⚡ Quick Start & Reproduction
+
+### 1. Run the CI/CD Quality Gate (Unit Tests)
+Verify that security guardrails and hallucination rejection tests pass:
+```powershell
+python llmops\test_quality_gate.py
+```
+*Expected Output:* `Ran 9 tests in 0.3s — OK`
+
+The suite exercises the production evaluator (`SemanticRAGEvaluator`) and the
+telemetry aggregator, not a legacy duplicate: it checks injection blocking, PII
+redaction (email, API key, SSN, and model-output leaks), grounded-answer
+faithfulness, detection of a fabricated numeric claim, drift reporting "not
+evaluated" until a real baseline is fitted (and again after a reset), that
+blocked/PII turns still count as security incidents, and that the displayed
+hallucination rate follows the current cutoff.
+
+### 2. Run the Retrieval Regression Gate
+Evaluate retrieval quality on the labelled benchmark and verify the gate blocks a degraded configuration:
+```powershell
+python llmops\run_regression_experiment.py
+```
+This will:
+- Score a baseline configuration (C0) with Recall@K and MRR.
+- Score a perturbed configuration (C1) and check the MRR / Recall@3 tolerances.
+- Print a PASS / BLOCKED decision for the CI/CD gate.
+
+### 3. Generate Real Observability Data
+The dashboard has no seeded or scripted numbers. Every metric it shows comes from
+`llmops/reports/telemetry_audit_log.jsonl`, which only receives entries when you
+actually chat. Every turn is logged — answered, refused, or guardrail-blocked —
+but only answers grounded in a document enter the quality aggregates.
+
+To reproduce the logged PDF run reported in §5.2 of the report (two real papers
+from `research_paper_submission/`, live Groq answers, live scoring):
 
 ```powershell
-.\setup_windows.ps1
+python scripts\run_live_eval.py
 ```
 
-4. Copy `.env.example` to `.env`.
-5. Add your `GROQ_API_KEY`.
-6. Start the app:
+### 4. Replay the 20 Sidebar Chats
+The 20 chats in `chats.json` are re-asked turn by turn through the real pipeline
+(guardrails → retrieval → generation → scoring → telemetry). Every chat uses the
+**same** knowledge base, `llmops/data/eval_corpus.json` (24 passages), so the
+resulting metrics describe one corpus rather than 20 private ones:
 
 ```powershell
-.\run_app.ps1
+python scripts\replay_chats.py
 ```
 
-## Qdrant configuration
+The script:
+- retrieves, generates and scores each turn live (no pre-computed answers),
+- appends its turns to the same audit log, so the earlier PDF run is preserved,
+- rewrites `chats.json` with the actual model answers,
+- logs refused turns as `is_answer=false`, excluded from quality aggregates.
 
-By default the app uses local on-disk Qdrant storage under `knowledge_base/`.
+Pass `--fresh` to archive the current log before replaying; the default appends.
 
-If you want to connect to a remote Qdrant instance, set these in `.env`:
+Open a replayed chat in the sidebar and press **Load shared corpus for follow-ups**
+to ask new questions against the same passages.
 
-```env
-QDRANT_URL=https://your-qdrant-instance
-QDRANT_API_KEY=your_api_key
-```
+Both scripts append. They never erase an existing run.
 
-If `QDRANT_URL` is empty, the app uses local persistent storage.
+---
 
-## OCR configuration
+## 📊 Key Results
 
-The app now tries local OCR first with Tesseract and Poppler, then falls back to Groq OCR if local extraction is unavailable or too weak.
+All numbers below are produced by scripts in this repository. No value is hand-entered.
 
-Add these to `.env` if you installed them manually on Windows:
+**Retrieval regression benchmark** (`python llmops\run_regression_experiment.py`, 45 labelled queries over 24 passages):
 
-```env
-TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe
-POPPLER_PATH=C:\path\to\poppler\Library\bin
-```
+| Configuration | Recall@1 | Recall@3 | MRR | Gate |
+| :--- | :--- | :--- | :--- | :--- |
+| C0 baseline (TF-IDF, top-3) | 0.9111 | 0.9778 | 0.9444 | PASS |
+| C1 perturbed (noise σ=0.15) | 0.6000 | 0.7556 | 0.6704 | **BLOCKED** |
 
-If those values are blank, the app will still work, but scanned PDFs and images will rely more heavily on Groq OCR.
+**Chat replay** (`python scripts\replay_chats.py`, 20 chats / 40 turns over one shared corpus):
 
-## Optional packages
+| Measure | Value |
+| :--- | :--- |
+| Turns replayed | 40 |
+| Answered from documents | 38 |
+| Honest refusals | 2 |
+| Audited RAG turns (PDF run + chat replay) | 44 |
+| Mean faithfulness (cutoff 0.50) | 1.000 |
+| Mean answer relevance | 0.807 |
+| Mean composite RAG quality | 0.933 |
+| Hallucination rate | 0.0% (0 / 44 decisions) |
+| Mean latency | 6,859 ms |
+| P95 latency | 23,123 ms |
 
-The core app uses TF-IDF embeddings for the most compatible first run.
+The two refusals are `chat-8` turn 2 ("What categories of data does that cover?")
+and `chat-11` turn 2 ("What is the purpose of that connection?"). Both are
+pronoun-dependent follow-ups, and retrieval/grading sees only the current
+question, so the pipeline refused instead of guessing. They remain in the log
+with null quality metrics and are excluded from the aggregates.
 
-- `requirements.txt`: core app dependencies, including Qdrant
-- `requirements-optional.txt`: optional transformer embedding packages
+Latency includes live Groq inference plus local sentence-transformer embedding,
+so it is an end-to-end batch measurement, not a served-SLA figure.
 
-Install optional transformer extras with:
+**Guardrails**: `python llmops\test_quality_gate.py` runs 9 unit tests covering
+injection blocking, input and output PII redaction (including SSN), grounded-answer
+acceptance, hallucination rejection, drift "not evaluated" before a baseline exists
+and after a reset, security-count coverage for blocked turns, and
+cutoff-consistent hallucination rates.
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-optional.txt
-```
+---
 
-## CLI
-
-To index PDFs from the `data/` folder into Qdrant and query them from the terminal:
-
-```powershell
-python main.py
-```
-
-## Notes
-
-- The checked-in `.venv` in this repo was copied from another operating system and should not be reused on Windows.
-- Local Qdrant mode is the best fit for getting started quickly on this project.
-- If package compatibility becomes an issue on Python 3.14, use Python 3.11 or 3.12 for the smoothest setup.
-
-## Deploy to Streamlit Community Cloud
-
-The app is ready to deploy from this repository. Uploaded documents are stored in-memory for the current session, so nothing needs to persist on the cloud.
-
-1. Push this repository to GitHub (see below).
-2. On <https://share.streamlit.io>, click **Create app**, connect your GitHub repo, and set the main file to `app.py`.
-3. In **Advanced settings**:
-   - Set **Python version** to `3.12` (Community Cloud ignores `runtime.txt`).
-   - Paste the contents of `.streamlit/secrets.toml.example` into **Secrets**, filling in your real `GROQ_API_KEY` (and optionally `TAVILY_API_KEY`). Secrets are injected as environment variables, which is how the app reads them.
-4. Deploy. `packages.txt` installs `tesseract-ocr` and `poppler-utils` for OCR support.
-
-Create the GitHub repo and push from PowerShell:
-
-```powershell
-git init
-git add .
-git commit -m "Initial commit"
-gh repo create rag-document-q-a-system --public --source . --push
-```
-
-If you do not use the GitHub CLI, create an empty repo on github.com, then run:
-
-```powershell
-git remote add origin https://github.com/YOUR_USERNAME/rag-document-q-a-system.git
-git branch -M main
-git push -u origin main
-```
-
+## 📄 Submission Documents
+- **Complete Academic Report:** [PROJECT_REPORT_AIM4142.md](PROJECT_REPORT_AIM4142.md)

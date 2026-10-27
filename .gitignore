@@ -4,8 +4,9 @@ __pycache__/
 data/
 .env
 .DS_Store
-chats.json
 chat_history.json
 knowledge_base/
 .streamlit/secrets.toml
 *.log
+
+chats.json

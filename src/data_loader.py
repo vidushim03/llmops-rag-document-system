@@ -1,5 +1,4 @@
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, CSVLoader, Docx2txtLoader
-import csv
 
 def load_pdf(path):
     """

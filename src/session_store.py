@@ -1,5 +1,7 @@
+import math
 import uuid
-from typing import List, Optional
+from datetime import datetime, timezone
+from typing import List
 
 from langchain_core.documents import Document
 
@@ -55,19 +57,49 @@ class SessionVectorStore:
             "source_name": source_name,
             "chunk_count": len(docs),
             "page_count": len(page_numbers),
-            "ingested_at": source_id,
+            "ingested_at": datetime.now(timezone.utc).isoformat(),
         }
         self._source_order.append(source_id)
         return self._sources[source_id]
 
     def similarity_search(self, query: str, k: int = 4) -> List[Document]:
         query_vector = self.embeddings.embed_query(query)
+        query_norm = math.sqrt(sum(value * value for value in query_vector))
         scored = []
         for doc, vector, _source_id in self._entries:
+            # Cosine, not raw dot product: transformer embeddings are not
+            # guaranteed to be unit-normalised, and the ranking must not depend
+            # on vector magnitude.
             dot = sum(a * b for a, b in zip(query_vector, vector))
-            scored.append((dot, doc))
+            vector_norm = math.sqrt(sum(value * value for value in vector))
+            if query_norm and vector_norm:
+                score = dot / (query_norm * vector_norm)
+            else:
+                score = 0.0
+            scored.append((score, doc))
         scored.sort(key=lambda item: item[0], reverse=True)
         return [doc for _dot, doc in scored[:k]]
+
+    def all_texts(self) -> List[str]:
+        """Return the raw text of every ingested chunk.
+
+        Used to fit the semantic-drift baseline on the documents that are
+        actually in this session, so drift is measured against real material
+        instead of a hardcoded reference corpus.
+        """
+        return [doc.page_content for doc, _vector, _source_id in self._entries]
+
+    def documents_for_source(self, source_name: str) -> List[Document]:
+        """Return the stored chunks that belong to one source.
+
+        Public counterpart to the private ``_entries`` list, so the retriever
+        does not have to reach into storage internals.
+        """
+        return [
+            doc
+            for doc, _vector, _source_id in self._entries
+            if (doc.metadata or {}).get("source") == source_name
+        ]
 
     def list_sources(self) -> List[dict]:
         return [self._sources[source_id] for source_id in reversed(self._source_order)]

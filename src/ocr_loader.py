@@ -4,7 +4,7 @@ import os
 import re
 from pathlib import Path
 
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF (the bare `fitz` alias is deprecated)
 from dotenv import load_dotenv
 from groq import Groq
 from langchain_core.documents import Document
@@ -15,7 +15,7 @@ load_dotenv()
 MAX_OCR_PAGES = int(os.getenv("MAX_OCR_PAGES", "5"))
 TESSERACT_CMD = os.getenv("TESSERACT_CMD", "").strip()
 POPPLER_PATH = os.getenv("POPPLER_PATH", "").strip()
-GROQ_OCR_MODEL = os.getenv("GROQ_OCR_MODEL", "qwen/qwen3.6-27b").strip()
+GROQ_OCR_MODEL = os.getenv("GROQ_OCR_MODEL", "llama-3.2-11b-vision-preview").strip()
 
 
 def _configure_local_ocr():
@@ -49,6 +49,7 @@ def _enough_text(text: str, minimum_chars: int = 40) -> bool:
 
 
 def _clean_response(text: str) -> str:
+    text = text or ""
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
     return cleaned or text.strip()
 
@@ -149,6 +150,7 @@ def _load_pdf_with_local_ocr(path):
 
 def _load_pdf_with_groq_ocr(path):
     docs = []
+    pdf = None
 
     try:
         pdf = fitz.open(path)
@@ -170,13 +172,16 @@ def _load_pdf_with_groq_ocr(path):
                     )
                 )
 
-        pdf.close()
         print(
             f"Groq OCR completed: {len(docs)} pages extracted "
             f"(limited to {pages_to_process})"
         )
     except Exception as exc:
         print(f"Groq OCR failed for {path}: {exc}")
+    finally:
+        # Close even when a page fails, so the file handle is never leaked.
+        if pdf is not None:
+            pdf.close()
 
     return docs
 
