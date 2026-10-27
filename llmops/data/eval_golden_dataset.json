@@ -1,0 +1,317 @@
+[
+  {
+    "query_id": "Q01",
+    "query": "What is the mandatory retention duration for customer transactional records?",
+    "relevant_doc_id": "DOC_FIN_01",
+    "ground_truth_context": "Customer transactional records must be stored in encrypted cold storage for a minimum duration of 7 years under regulatory SLA.",
+    "ground_truth_answer": "Customer transactional records must be stored in encrypted cold storage for at least 7 years under regulatory SLA."
+  },
+  {
+    "query_id": "Q02",
+    "query": "What are the latency SLA and canary requirements for deploying deep learning models to production?",
+    "relevant_doc_id": "DOC_OPS_02",
+    "ground_truth_context": "Production deployment of deep learning models requires automated canary validation with sub-120ms latency and 48hr stability.",
+    "ground_truth_answer": "Deep learning models require automated canary validation running for 48 hours with a latency under 120 milliseconds."
+  },
+  {
+    "query_id": "Q03",
+    "query": "Which sensitive personal data attributes must never be stored in plaintext?",
+    "relevant_doc_id": "DOC_SEC_03",
+    "ground_truth_context": "Personally Identifiable Information including Social Security Numbers, primary account numbers, and passwords must never be stored in plaintext.",
+    "ground_truth_answer": "Social Security Numbers, primary account numbers, and passwords must never be stored in clear plaintext."
+  },
+  {
+    "query_id": "Q04",
+    "query": "How does Retrieval-Augmented Generation bridge vector indices with large language models?",
+    "relevant_doc_id": "DOC_AI_04",
+    "ground_truth_context": "Retrieval-Augmented Generation connects dense vector index embeddings with large language models for domain-specific grounding.",
+    "ground_truth_answer": "RAG connects dense vector index embeddings with large language models to provide domain-specific factual grounding."
+  },
+  {
+    "query_id": "Q05",
+    "query": "What error rate threshold triggers an automated rollback during model canary deployment?",
+    "relevant_doc_id": "DOC_OPS_05",
+    "ground_truth_context": "Canary validation triggers an automated rollback if the error rate exceeds 0.05 percent during the observation window.",
+    "ground_truth_answer": "An automated rollback is triggered if the canary error rate exceeds 0.05 percent."
+  },
+  {
+    "query_id": "Q06",
+    "query": "How long do we keep transaction data and where does it physically live?",
+    "relevant_doc_id": "DOC_FIN_01",
+    "ground_truth_context": "Customer transactional records must be stored in encrypted cold storage for a minimum duration of 7 years under regulatory SLA.",
+    "ground_truth_answer": "Transactional records are kept for a minimum of 7 years in encrypted cold storage."
+  },
+  {
+    "query_id": "Q07",
+    "query": "What obliges us to hold on to transaction records for that window?",
+    "relevant_doc_id": "DOC_FIN_01",
+    "ground_truth_context": "Customer transactional records must be stored in encrypted cold storage for a minimum duration of 7 years under regulatory SLA.",
+    "ground_truth_answer": "The retention window is imposed by a regulatory SLA."
+  },
+  {
+    "query_id": "Q08",
+    "query": "How long are privileged access audit logs kept and how often are they reviewed?",
+    "relevant_doc_id": "DOC_FIN_06",
+    "ground_truth_context": "Immutable audit logs of privileged access must be retained for 24 months in write-once-read-many storage and reviewed quarterly by the compliance team.",
+    "ground_truth_answer": "They are retained for 24 months and reviewed quarterly by the compliance team."
+  },
+  {
+    "query_id": "Q09",
+    "query": "What storage guarantee applies to audit logs?",
+    "relevant_doc_id": "DOC_FIN_06",
+    "ground_truth_context": "Immutable audit logs of privileged access must be retained for 24 months in write-once-read-many storage and reviewed quarterly by the compliance team.",
+    "ground_truth_answer": "Audit logs are held in write-once-read-many (immutable) storage."
+  },
+  {
+    "query_id": "Q10",
+    "query": "Who has to approve an unusually large invoice and how quickly?",
+    "relevant_doc_id": "DOC_FIN_07",
+    "ground_truth_context": "Any invoice exceeding 50,000 USD requires written sign-off from the Chief Financial Officer within two business days of submission.",
+    "ground_truth_answer": "The Chief Financial Officer must sign off in writing within two business days."
+  },
+  {
+    "query_id": "Q11",
+    "query": "At what invoice value does CFO approval become mandatory?",
+    "relevant_doc_id": "DOC_FIN_07",
+    "ground_truth_context": "Any invoice exceeding 50,000 USD requires written sign-off from the Chief Financial Officer within two business days of submission.",
+    "ground_truth_answer": "Above 50,000 USD."
+  },
+  {
+    "query_id": "Q12",
+    "query": "Within what time must a personal data breach be disclosed to the regulator?",
+    "relevant_doc_id": "DOC_FIN_08",
+    "ground_truth_context": "A confirmed personal data breach must be reported to the data protection authority within 72 hours of discovery under the DPDP Act.",
+    "ground_truth_answer": "Within 72 hours of discovery, under the DPDP Act."
+  },
+  {
+    "query_id": "Q13",
+    "query": "What latency and stability conditions must a canary deployment satisfy?",
+    "relevant_doc_id": "DOC_OPS_02",
+    "ground_truth_context": "Production deployment of deep learning models requires automated canary validation with sub-120ms latency and 48hr stability.",
+    "ground_truth_answer": "Latency below 120 ms sustained over 48 hours."
+  },
+  {
+    "query_id": "Q14",
+    "query": "At what error rate does canary validation roll back automatically?",
+    "relevant_doc_id": "DOC_OPS_05",
+    "ground_truth_context": "Canary validation triggers an automated rollback if the error rate exceeds 0.05 percent during the observation window.",
+    "ground_truth_answer": "When the error rate exceeds 0.05 percent."
+  },
+  {
+    "query_id": "Q15",
+    "query": "What is required to move a model from staging into production?",
+    "relevant_doc_id": "DOC_OPS_09",
+    "ground_truth_context": "Promotion of a model from staging to production requires a signed model card and approval from two independent reviewers in the model registry.",
+    "ground_truth_answer": "A signed model card plus approval from two independent reviewers."
+  },
+  {
+    "query_id": "Q16",
+    "query": "How many approvers does a production model promotion need?",
+    "relevant_doc_id": "DOC_OPS_09",
+    "ground_truth_context": "Promotion of a model from staging to production requires a signed model card and approval from two independent reviewers in the model registry.",
+    "ground_truth_answer": "Two independent reviewers."
+  },
+  {
+    "query_id": "Q17",
+    "query": "What counts as a SEV-1 incident and what is the response time?",
+    "relevant_doc_id": "DOC_OPS_10",
+    "ground_truth_context": "A SEV-1 incident is defined as any customer-facing outage and must be acknowledged by the on-call engineer within 15 minutes.",
+    "ground_truth_answer": "Any customer-facing outage; acknowledged by the on-call engineer within 15 minutes."
+  },
+  {
+    "query_id": "Q18",
+    "query": "How fast must on-call acknowledge the most severe outage class?",
+    "relevant_doc_id": "DOC_OPS_10",
+    "ground_truth_context": "A SEV-1 incident is defined as any customer-facing outage and must be acknowledged by the on-call engineer within 15 minutes.",
+    "ground_truth_answer": "Within 15 minutes."
+  },
+  {
+    "query_id": "Q19",
+    "query": "Is there a cap on GPU hours for a single training experiment?",
+    "relevant_doc_id": "DOC_OPS_11",
+    "ground_truth_context": "Training experiments are limited to 8 A100 GPU-hours by default; any longer run requires a capacity exception approved by the platform lead.",
+    "ground_truth_answer": "Yes, 8 A100 GPU-hours by default; longer runs need a capacity exception."
+  },
+  {
+    "query_id": "Q20",
+    "query": "Which identifiers are forbidden from being stored unencrypted?",
+    "relevant_doc_id": "DOC_SEC_03",
+    "ground_truth_context": "Personally Identifiable Information including Social Security Numbers, primary account numbers, and passwords must never be stored in plaintext.",
+    "ground_truth_answer": "Social Security Numbers, primary account numbers, and passwords."
+  },
+  {
+    "query_id": "Q21",
+    "query": "How often must symmetric keys be rotated?",
+    "relevant_doc_id": "DOC_SEC_12",
+    "ground_truth_context": "Symmetric encryption keys must be rotated every 90 days, while asymmetric signing keys are rotated annually with an overlap window for verification.",
+    "ground_truth_answer": "Every 90 days."
+  },
+  {
+    "query_id": "Q22",
+    "query": "What is the rotation schedule for asymmetric signing keys?",
+    "relevant_doc_id": "DOC_SEC_12",
+    "ground_truth_context": "Symmetric encryption keys must be rotated every 90 days, while asymmetric signing keys are rotated annually with an overlap window for verification.",
+    "ground_truth_answer": "Annually, with an overlap window for verification."
+  },
+  {
+    "query_id": "Q23",
+    "query": "How often must standing privileged accounts be recertified?",
+    "relevant_doc_id": "DOC_SEC_13",
+    "ground_truth_context": "Privileged accounts must be recertified every quarter, and standing access is revoked unless least-privilege justification is recorded.",
+    "ground_truth_answer": "Every quarter; standing access is revoked without recorded least-privilege justification."
+  },
+  {
+    "query_id": "Q24",
+    "query": "What is the purpose of pairing a dense vector index with a language model?",
+    "relevant_doc_id": "DOC_AI_04",
+    "ground_truth_context": "Retrieval-Augmented Generation connects dense vector index embeddings with large language models for domain-specific grounding.",
+    "ground_truth_answer": "To ground model responses in domain-specific content retrieved from the vector index."
+  },
+  {
+    "query_id": "Q25",
+    "query": "What has to happen to the index after changing the embedding model?",
+    "relevant_doc_id": "DOC_AI_14",
+    "ground_truth_context": "Upgrading the embedding model invalidates the vector index, so the index version is pinned to the embedding model hash and rebuilt before serving traffic.",
+    "ground_truth_answer": "The index is invalidated and must be rebuilt before serving traffic."
+  },
+  {
+    "query_id": "Q26",
+    "query": "Why is the index version tied to a model hash?",
+    "relevant_doc_id": "DOC_AI_14",
+    "ground_truth_context": "Upgrading the embedding model invalidates the vector index, so the index version is pinned to the embedding model hash and rebuilt before serving traffic.",
+    "ground_truth_answer": "To pin the index to the embedding model that produced it, preventing a stale index from serving traffic."
+  },
+  {
+    "query_id": "Q27",
+    "query": "What chunk size and overlap does the indexing pipeline use?",
+    "relevant_doc_id": "DOC_AI_15",
+    "ground_truth_context": "Documents are chunked into 512-token segments with 64 tokens of overlap, and chunk boundaries are aligned to markdown headings where possible.",
+    "ground_truth_answer": "512-token chunks with 64 tokens of overlap."
+  },
+  {
+    "query_id": "Q28",
+    "query": "Are chunk boundaries aligned with document structure?",
+    "relevant_doc_id": "DOC_AI_15",
+    "ground_truth_context": "Documents are chunked into 512-token segments with 64 tokens of overlap, and chunk boundaries are aligned to markdown headings where possible.",
+    "ground_truth_answer": "Yes, boundaries are aligned to markdown headings where possible."
+  },
+  {
+    "query_id": "Q29",
+    "query": "When should the assistant decline to answer?",
+    "relevant_doc_id": "DOC_AI_16",
+    "ground_truth_context": "Generated answers are scored with sentence-level entailment against retrieved context, and the assistant refuses to answer when no retrieved passage supports the claim.",
+    "ground_truth_answer": "When no retrieved passage supports the claim."
+  },
+  {
+    "query_id": "Q30",
+    "query": "How are generated answers checked for grounding at sentence level?",
+    "relevant_doc_id": "DOC_AI_16",
+    "ground_truth_context": "Generated answers are scored with sentence-level entailment against retrieved context, and the assistant refuses to answer when no retrieved passage supports the claim.",
+    "ground_truth_answer": "Each sentence is scored by entailment against the retrieved context."
+  },
+  {
+    "query_id": "Q31",
+    "query": "How are datasets and training runs linked for reproducibility?",
+    "relevant_doc_id": "DOC_DATA_17",
+    "ground_truth_context": "Datasets are versioned with DVC, and every training run records the exact data commit hash alongside its model artifact.",
+    "ground_truth_answer": "Datasets are versioned in DVC and each run records the data commit hash with its model artifact."
+  },
+  {
+    "query_id": "Q32",
+    "query": "Which tool is used to version the training data?",
+    "relevant_doc_id": "DOC_DATA_17",
+    "ground_truth_context": "Datasets are versioned with DVC, and every training run records the exact data commit hash alongside its model artifact.",
+    "ground_truth_answer": "DVC."
+  },
+  {
+    "query_id": "Q33",
+    "query": "What is the online feature serving latency target?",
+    "relevant_doc_id": "DOC_DATA_18",
+    "ground_truth_context": "The feature store serves online features with a p99 latency below 10 milliseconds, and offline-online parity is verified nightly by a reconciliation job.",
+    "ground_truth_answer": "p99 latency below 10 milliseconds."
+  },
+  {
+    "query_id": "Q34",
+    "query": "How is offline and online feature parity verified?",
+    "relevant_doc_id": "DOC_DATA_18",
+    "ground_truth_context": "The feature store serves online features with a p99 latency below 10 milliseconds, and offline-online parity is verified nightly by a reconciliation job.",
+    "ground_truth_answer": "By a nightly reconciliation job."
+  },
+  {
+    "query_id": "Q35",
+    "query": "What conditions cause the data quality gate to stop the pipeline?",
+    "relevant_doc_id": "DOC_DATA_19",
+    "ground_truth_context": "A data quality gate blocks the pipeline when any column exceeds a 5 percent null rate or when a schema change is detected.",
+    "ground_truth_answer": "Any column above a 5 percent null rate, or a detected schema change."
+  },
+  {
+    "query_id": "Q36",
+    "query": "What null-rate threshold fails data validation?",
+    "relevant_doc_id": "DOC_DATA_19",
+    "ground_truth_context": "A data quality gate blocks the pipeline when any column exceeds a 5 percent null rate or when a schema change is detected.",
+    "ground_truth_answer": "5 percent."
+  },
+  {
+    "query_id": "Q37",
+    "query": "What inter-annotator agreement is needed before labels are used?",
+    "relevant_doc_id": "DOC_DATA_20",
+    "ground_truth_context": "Annotation tasks require two independent labellers and a Cohen's kappa of at least 0.70 before the labels are accepted for training.",
+    "ground_truth_answer": "A Cohen's kappa of at least 0.70."
+  },
+  {
+    "query_id": "Q38",
+    "query": "How many people must label each annotation task?",
+    "relevant_doc_id": "DOC_DATA_20",
+    "ground_truth_context": "Annotation tasks require two independent labellers and a Cohen's kappa of at least 0.70 before the labels are accepted for training.",
+    "ground_truth_answer": "Two independent labellers."
+  },
+  {
+    "query_id": "Q39",
+    "query": "Who can approve running a training job beyond the default GPU budget?",
+    "relevant_doc_id": "DOC_OPS_11",
+    "ground_truth_context": "Training experiments are limited to 8 A100 GPU-hours by default; any longer run requires a capacity exception approved by the platform lead.",
+    "ground_truth_answer": "The platform lead, through a capacity exception."
+  },
+  {
+    "query_id": "Q40",
+    "query": "Which law underpins the breach notification deadline?",
+    "relevant_doc_id": "DOC_FIN_08",
+    "ground_truth_context": "A confirmed personal data breach must be reported to the data protection authority within 72 hours of discovery under the DPDP Act.",
+    "ground_truth_answer": "The DPDP Act."
+  },
+  {
+    "query_id": "Q41",
+    "query": "What artefact must document a model before it is released?",
+    "relevant_doc_id": "DOC_OPS_09",
+    "ground_truth_context": "Promotion of a model from staging to production requires a signed model card and approval from two independent reviewers in the model registry.",
+    "ground_truth_answer": "A signed model card."
+  },
+  {
+    "query_id": "Q42",
+    "query": "Why is there an overlap window when signing keys are rotated?",
+    "relevant_doc_id": "DOC_SEC_12",
+    "ground_truth_context": "Symmetric encryption keys must be rotated every 90 days, while asymmetric signing keys are rotated annually with an overlap window for verification.",
+    "ground_truth_answer": "The overlap window exists for verification."
+  },
+  {
+    "query_id": "Q43",
+    "query": "What is the acknowledgment deadline for a customer-facing outage?",
+    "relevant_doc_id": "DOC_OPS_10",
+    "ground_truth_context": "A SEV-1 incident is defined as any customer-facing outage and must be acknowledged by the on-call engineer within 15 minutes.",
+    "ground_truth_answer": "Within 15 minutes, by the on-call engineer."
+  },
+  {
+    "query_id": "Q44",
+    "query": "How much token overlap is applied between adjacent chunks?",
+    "relevant_doc_id": "DOC_AI_15",
+    "ground_truth_context": "Documents are chunked into 512-token segments with 64 tokens of overlap, and chunk boundaries are aligned to markdown headings where possible.",
+    "ground_truth_answer": "64 tokens."
+  },
+  {
+    "query_id": "Q45",
+    "query": "What agreement metric is used to judge annotation quality?",
+    "relevant_doc_id": "DOC_DATA_20",
+    "ground_truth_context": "Annotation tasks require two independent labellers and a Cohen's kappa of at least 0.70 before the labels are accepted for training.",
+    "ground_truth_answer": "Cohen's kappa."
+  }
+]

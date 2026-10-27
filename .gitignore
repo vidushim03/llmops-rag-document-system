@@ -2,6 +2,7 @@ faiss_index/
 .venv/
 __pycache__/
 data/
+!llmops/data/
 .env
 .DS_Store
 chat_history.json
