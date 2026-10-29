@@ -84,7 +84,6 @@ guardrails, evaluator, telemetry = load_llmops_engine(_telemetry_signature(_audi
 
 # Sidebar Navigation
 st.sidebar.title("🛡️ LLMOps Platform")
-st.sidebar.caption("Course: AIM4142 MLOps | Dept of AI&ML")
 view_mode = st.sidebar.radio(
     "Navigation Pane",
     ["📊 Real-Time Observability Dashboard", "🧪 Interactive Guardrail & Evaluation Playground", "📜 Historical Audit Telemetry"]
@@ -132,8 +131,6 @@ if view_mode == "📊 Real-Time Observability Dashboard":
             st.metric(
                 "P95 End-to-End Latency",
                 f"{p95_ms} ms",
-                delta="< 5000ms target" if p95_ms < 5000 else "Above 5000ms target",
-                delta_color="normal" if p95_ms < 5000 else "inverse",
             )
     with col4:
         halluc_rate = summary.get("hallucination_rate_pct")
