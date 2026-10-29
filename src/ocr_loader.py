@@ -2,6 +2,7 @@ import base64
 import io
 import os
 import re
+import shutil
 from pathlib import Path
 
 import pymupdf as fitz  # PyMuPDF (the bare `fitz` alias is deprecated)
@@ -12,10 +13,10 @@ from PIL import Image
 
 load_dotenv()
 
-MAX_OCR_PAGES = int(os.getenv("MAX_OCR_PAGES", "5"))
+MAX_OCR_PAGES = int(os.getenv("MAX_OCR_PAGES", "0"))
+MAX_GROQ_OCR_PAGES = int(os.getenv("MAX_GROQ_OCR_PAGES", "5"))
 TESSERACT_CMD = os.getenv("TESSERACT_CMD", "").strip()
-POPPLER_PATH = os.getenv("POPPLER_PATH", "").strip()
-GROQ_OCR_MODEL = os.getenv("GROQ_OCR_MODEL", "llama-3.2-11b-vision-preview").strip()
+GROQ_OCR_MODEL = os.getenv("GROQ_OCR_MODEL", "qwen/qwen3.8-27b").strip()
 
 
 def _configure_local_ocr():
@@ -26,6 +27,14 @@ def _configure_local_ocr():
 
     if TESSERACT_CMD:
         pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
+    elif not shutil.which("tesseract"):
+        for candidate in (
+            Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
+            Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
+        ):
+            if candidate.is_file():
+                pytesseract.pytesseract.tesseract_cmd = str(candidate)
+                break
 
     return pytesseract
 
@@ -41,7 +50,15 @@ def _get_client():
 
 
 def _local_ocr_available() -> bool:
-    return _configure_local_ocr() is not None
+    pytesseract = _configure_local_ocr()
+    if pytesseract is None:
+        return False
+    try:
+        pytesseract.get_tesseract_version()
+        return True
+    except Exception as exc:
+        print(f"Local OCR is unavailable: {exc}")
+        return False
 
 
 def _enough_text(text: str, minimum_chars: int = 40) -> bool:
@@ -105,33 +122,24 @@ def _image_bytes_to_text_local(image_bytes: bytes) -> str:
 
 
 def _load_pdf_with_local_ocr(path):
-    try:
-        from pdf2image import convert_from_path
-    except ImportError:
-        print("pdf2image is not installed, skipping local PDF OCR.")
-        return []
-
     if not _local_ocr_available():
-        print("pytesseract is not installed, skipping local PDF OCR.")
+        print("Tesseract OCR is unavailable, skipping local PDF OCR.")
         return []
 
     docs = []
+    pdf = None
 
     try:
-        images = convert_from_path(
-            path,
-            dpi=220,
-            first_page=1,
-            last_page=MAX_OCR_PAGES,
-            poppler_path=POPPLER_PATH or None,
-        )
+        pdf = fitz.open(path)
+        page_count = len(pdf) if MAX_OCR_PAGES <= 0 else min(len(pdf), MAX_OCR_PAGES)
+        print(f"Local OCR processing started: {page_count} of {len(pdf)} pages")
 
-        print(f"Local OCR processing started: {len(images)} pages loaded")
-
-        for page_index, image in enumerate(images, start=1):
-            buffer = io.BytesIO()
-            image.save(buffer, format="PNG")
-            text = _image_bytes_to_text_local(buffer.getvalue())
+        pytesseract = _configure_local_ocr()
+        for page_index in range(page_count):
+            page = pdf[page_index]
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            image = Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("L")
+            text = pytesseract.image_to_string(image).strip()
 
             if _enough_text(text):
                 docs.append(
@@ -146,6 +154,9 @@ def _load_pdf_with_local_ocr(path):
     except Exception as exc:
         print(f"Local OCR failed for {path}: {exc}")
         return []
+    finally:
+        if pdf is not None:
+            pdf.close()
 
 
 def _load_pdf_with_groq_ocr(path):
@@ -155,7 +166,10 @@ def _load_pdf_with_groq_ocr(path):
     try:
         pdf = fitz.open(path)
         total_pages = len(pdf)
-        pages_to_process = min(total_pages, MAX_OCR_PAGES)
+        page_limit = MAX_GROQ_OCR_PAGES
+        if MAX_OCR_PAGES > 0:
+            page_limit = min(page_limit, MAX_OCR_PAGES)
+        pages_to_process = min(total_pages, page_limit)
 
         print(f"Groq OCR processing started: {total_pages} pages found")
 

@@ -32,6 +32,18 @@ def build_collection_name(mode: str) -> str:
     return f"knowledge_base_{mode}"
 
 
+def build_chat_collection_name(chat_id: str) -> str:
+    """Return a stable, Qdrant-safe collection name for one chat's documents."""
+    safe_id = "".join(char for char in str(chat_id) if char.isalnum())[:32]
+    if not safe_id:
+        raise ValueError("chat_id must contain at least one alphanumeric character")
+    return f"chat_{safe_id}"
+
+
+def build_draft_collection_name() -> str:
+    return "chat_draft"
+
+
 class QdrantKnowledgeBase:
     def __init__(
         self,
@@ -40,12 +52,14 @@ class QdrantKnowledgeBase:
         base_dir: Optional[Path] = None,
         url: Optional[str] = None,
         api_key: Optional[str] = None,
+        collection_name: Optional[str] = None,
+        collection_name_override: Optional[str] = None,
     ):
         self.embeddings = embeddings
         self.embedding_mode = embedding_mode
         self.base_dir = Path(base_dir or os.getenv("QDRANT_PATH", "knowledge_base"))
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.collection_name = build_collection_name(embedding_mode)
+        self.collection_name = collection_name_override or collection_name or build_collection_name(embedding_mode)
         self.manifest_path = self.base_dir / "manifest.json"
         self.qdrant_storage_path = self.base_dir / "qdrant_storage"
 
@@ -124,21 +138,31 @@ class QdrantKnowledgeBase:
             vectors_config=self.vector_params,
         )
 
-    def _search_points(self, query_vector: List[float], limit: int = 5):
+    def _search_points(self, query_vector: List[float], limit: int = 5, query_filter=None):
         try:
+            kwargs = {
+                "collection_name": self.collection_name,
+                "query": query_vector,
+                "limit": limit,
+                "with_payload": True,
+            }
+            if query_filter is not None:
+                kwargs["query_filter"] = query_filter
             response = self.client.query_points(
-                collection_name=self.collection_name,
-                query=query_vector,
-                limit=limit,
-                with_payload=True,
+                **kwargs,
             )
             return getattr(response, "points", response)
         except AttributeError:
+            kwargs = {
+                "collection_name": self.collection_name,
+                "query_vector": query_vector,
+                "limit": limit,
+                "with_payload": True,
+            }
+            if query_filter is not None:
+                kwargs["query_filter"] = query_filter
             return self.client.search(
-                collection_name=self.collection_name,
-                query_vector=query_vector,
-                limit=limit,
-                with_payload=True,
+                **kwargs,
             )
 
     def _delete_points_by_source_id(self, source_id: str):
@@ -219,9 +243,19 @@ class QdrantKnowledgeBase:
 
         return collection_manifest["sources"][source_id]
 
-    def similarity_search(self, query: str, k: int = 4):
+    def similarity_search(self, query: str, k: int = 4, source_name: Optional[str] = None):
         query_vector = self.embeddings.embed_query(query)
-        results = self._search_points(query_vector, limit=k)
+        query_filter = None
+        if source_name is not None:
+            query_filter = self._models.Filter(
+                must=[
+                    self._models.FieldCondition(
+                        key="source_name",
+                        match=self._models.MatchValue(value=source_name),
+                    )
+                ]
+            )
+        results = self._search_points(query_vector, limit=k, query_filter=query_filter)
         documents = []
 
         for result in results:
@@ -278,6 +312,87 @@ class QdrantKnowledgeBase:
 
         documents.sort(key=lambda doc: doc.metadata.get("chunk_index") or 0)
         return documents
+
+    def all_texts(self) -> List[str]:
+        return [doc.page_content for source in self.list_sources() for doc in self.documents_for_source(source["source_name"])]
+
+    def evaluation_questions(
+        self, per_source: int = 5, source_names: Optional[List[str]] = None
+    ) -> List[dict]:
+        """Create deterministic evaluation cases from each indexed source."""
+        import re
+        questions = []
+        for source in self.list_sources():
+            if source_names is not None and source["source_name"] not in source_names:
+                continue
+            docs = self.documents_for_source(source["source_name"])
+            sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", " ".join(doc.page_content for doc in docs)) if len(part.split()) >= 6]
+            seen = set()
+            count = 0
+            for sentence in sentences:
+                if sentence.lower() in seen:
+                    continue
+                seen.add(sentence.lower())
+                question = "What does the document state about " + " ".join(sentence.split()[:7]).strip(" ,.;:") + "?"
+                questions.append({"question": question, "source": source["source_name"], "expected": sentence})
+                count += 1
+                if count >= per_source:
+                    break
+        return questions
+
+    def get_evaluation_baseline(self) -> Optional[dict]:
+        manifest = self._load_manifest()
+        return self._collection_manifest(manifest).get("evaluation_baseline")
+
+    def save_evaluation_baseline(self, results: List[dict]) -> dict:
+        manifest = self._load_manifest()
+        collection_manifest = self._collection_manifest(manifest)
+        existing = collection_manifest.get("evaluation_baseline")
+        if existing:
+            return existing
+        baseline = {
+            "results": results,
+            "question_count": len(results),
+            "mean_keyword_coverage": round(
+                sum(row.get("recall", 0.0) for row in results) / len(results), 4
+            ) if results else None,
+            "recorded_at": _utc_now(),
+        }
+        collection_manifest["evaluation_baseline"] = baseline
+        collection_manifest["updated_at"] = _utc_now()
+        self._save_manifest(manifest)
+        return baseline
+
+    def save_evaluation_comparison(
+        self, results: List[dict], new_document_results: Optional[List[dict]] = None
+    ) -> dict:
+        """Store regression and new-document checks without changing the baseline."""
+        manifest = self._load_manifest()
+        collection_manifest = self._collection_manifest(manifest)
+        baseline = collection_manifest.get("evaluation_baseline")
+        if not baseline:
+            return self.save_evaluation_baseline(results)
+        mean_score = round(sum(row.get("recall", 0.0) for row in results) / len(results), 4) if results else None
+        comparison = {
+            "results": results,
+            "new_document_results": new_document_results or [],
+            "mean_keyword_coverage": mean_score,
+            "new_document_mean_keyword_coverage": round(
+                sum(row.get("recall", 0.0) for row in (new_document_results or []))
+                / len(new_document_results), 4
+            ) if new_document_results else None,
+            "delta": round(mean_score - baseline["mean_keyword_coverage"], 4)
+            if mean_score is not None and baseline.get("mean_keyword_coverage") is not None else None,
+            "recorded_at": _utc_now(),
+        }
+        collection_manifest["evaluation_latest"] = comparison
+        collection_manifest["updated_at"] = _utc_now()
+        self._save_manifest(manifest)
+        return comparison
+
+    def get_latest_evaluation(self) -> Optional[dict]:
+        manifest = self._load_manifest()
+        return self._collection_manifest(manifest).get("evaluation_latest")
 
     def list_sources(self) -> List[dict]:
         """Derive the source list from indexed points.

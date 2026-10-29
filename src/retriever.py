@@ -150,18 +150,23 @@ def retrieve_docs(db, query):
         except Exception as exc:
             print(f"Extra retrieval query failed for {q!r}: {exc}")
 
-    # Ensure representation across all uploaded sources if multiple sources exist
+    # Search each source independently as well as globally. Otherwise a large
+    # or semantically similar later upload can crowd earlier files out of the
+    # global top-k, making their content appear to have disappeared.
     if hasattr(db, "list_sources") and db.source_count() > 1:
-        sources = [s["source_name"] for s in db.list_sources()]
-        for src_name in sources:
-            src_represented = any(d.metadata.get("source") == src_name for d in all_docs)
-            if not src_represented:
-                # Retrieve specific chunks for under-represented source
+        for source in db.list_sources():
+            source_name = source["source_name"]
+            try:
+                source_docs = db.similarity_search(query, k=3, source_name=source_name)
+            except TypeError:
                 get_source_docs = getattr(db, "documents_for_source", None)
-                if get_source_docs is not None:
-                    src_docs = get_source_docs(src_name)
-                    if src_docs:
-                        all_docs.extend(src_docs[:3])
+                source_docs = get_source_docs(source_name) if get_source_docs else []
+                source_docs = rerank_docs(query, source_docs, top_k=3)
+            for doc in source_docs:
+                key = (doc.page_content or "")[:100]
+                if key not in seen:
+                    seen.add(key)
+                    all_docs.append(doc)
 
     print(f"\n--- Retrieved {len(all_docs)} candidate chunks ---")
     return rerank_docs(query, all_docs, top_k=6)

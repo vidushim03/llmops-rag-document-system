@@ -20,6 +20,7 @@ from src.embedding import get_embeddings
 from src.agent import stream_agent
 from src.ocr_loader import load_image_text, load_pdf_with_ocr
 from src.session_store import SessionVectorStore
+from src.knowledge_base import QdrantKnowledgeBase, build_chat_collection_name
 from llmops.guardrails import LLMGuardrails
 from llmops.semantic_evaluator import SemanticRAGEvaluator
 from llmops.telemetry import LLMOpsTelemetry
@@ -390,6 +391,11 @@ def process_files(files):
                 if not docs or is_scanned_pdf(docs):
                     st.info(f"{file.name} appears scanned, so OCR is being used.")
                     docs = load_pdf_with_ocr(tmp_path)
+                    if not docs:
+                        st.warning(
+                            f"OCR could not extract text from {file.name}. Check that Tesseract is installed; "
+                            "the Groq fallback also needs a valid GROQ_API_KEY and vision model in .env."
+                        )
             elif suffix == "docx":
                 from src.data_loader import load_docx
                 docs = load_docx(tmp_path)
@@ -412,7 +418,7 @@ def process_files(files):
 
             if docs:
                 processed.append((file.name, docs))
-            else:
+            elif suffix != "pdf":
                 st.warning(f"No text could be extracted from {file.name}.")
         except Exception as exc:
             st.error(f"Error processing {file.name}: {exc}")
@@ -473,10 +479,17 @@ def save_chats():
 
 def create_chat(title="New Chat", messages=None):
     chat_id = str(uuid.uuid4())[:6]
-    st.session_state.all_chats[chat_id] = {
+    chat_record = {
         "title": title,
         "messages": list(messages or []),
     }
+    draft_store = st.session_state.get("draft_store")
+    chat_record["document_collection"] = (
+        draft_store.collection_name
+        if draft_store is not None
+        else build_chat_collection_name(chat_id)
+    )
+    st.session_state.all_chats[chat_id] = chat_record
     st.session_state.current_chat = chat_id
     # The draft uploader no longer exists once the draft becomes a real chat.
     # Clearing its signature stops the next draft from silently reusing it.
@@ -552,11 +565,76 @@ def migrate_legacy_history():
 
 def get_document_store():
     chat_id = st.session_state.current_chat
-    if chat_id and chat_id in st.session_state.chat_stores:
-        return st.session_state.chat_stores[chat_id]
-    if chat_id is None and st.session_state.draft_store is not None:
+    if chat_id is None:
         return st.session_state.draft_store
+    if chat_id and chat_id in st.session_state.chat_stores:
+        for other_id, other_store in list(st.session_state.chat_stores.items()):
+            if other_id != chat_id:
+                close = getattr(other_store, "close", None)
+                if close:
+                    close()
+                st.session_state.chat_stores.pop(other_id, None)
+        draft_store = st.session_state.draft_store
+        if draft_store is not None and draft_store is not st.session_state.chat_stores[chat_id]:
+            close = getattr(draft_store, "close", None)
+            if close:
+                close()
+            st.session_state.draft_store = None
+        return st.session_state.chat_stores[chat_id]
+    if chat_id:
+        chat_meta = st.session_state.all_chats.get(chat_id, {})
+        requested_collection = chat_meta.get("document_collection") or build_chat_collection_name(chat_id)
+        if (
+            st.session_state.draft_store is not None
+            and st.session_state.draft_store.collection_name == requested_collection
+        ):
+            st.session_state.chat_stores[chat_id] = st.session_state.draft_store
+            st.session_state.draft_store = None
+            return st.session_state.chat_stores[chat_id]
+        for other_id, other_store in list(st.session_state.chat_stores.items()):
+            if other_id != chat_id:
+                close = getattr(other_store, "close", None)
+                if close:
+                    close()
+                st.session_state.chat_stores.pop(other_id, None)
+        if st.session_state.draft_store is not None:
+            close = getattr(st.session_state.draft_store, "close", None)
+            if close:
+                close()
+            st.session_state.draft_store = None
+        store = persistent_chat_store(chat_id)
+        st.session_state.chat_stores[chat_id] = store
+        return store
     return None
+
+
+def persistent_chat_store(chat_id, mode="transformer"):
+    """Open this chat's durable local Qdrant collection."""
+    chat_meta = st.session_state.all_chats.get(chat_id, {})
+    return QdrantKnowledgeBase(
+        get_embeddings(mode=mode),
+        embedding_mode=mode,
+        base_dir=APP_DIR / "knowledge_base",
+        collection_name_override=chat_meta.get("document_collection") or build_chat_collection_name(chat_id),
+    )
+
+
+def score_retrieval_cases(store, cases):
+    """Score document-grounded questions against the top retrieved chunks."""
+    results = []
+    for case in cases:
+        found = store.similarity_search(case["question"], k=3)
+        expected_words = set(case["expected"].lower().split())
+        retrieved_words = set(
+            " ".join(doc.page_content for doc in found).lower().split()
+        )
+        coverage = len(expected_words & retrieved_words) / max(1, len(expected_words))
+        results.append({
+            **case,
+            "recall": round(coverage, 4),
+            "retrieved": bool(found),
+        })
+    return results
 
 
 def build_eval_corpus_store():
@@ -662,7 +740,11 @@ def render_chat_persistence_bridge():
         return
     st.session_state.persistence_bridge_rendered = True
     
-    payload = json.dumps(st.session_state.all_chats).replace("</", "<\\/")
+    # Embed the serialized chats as a JavaScript string literal. Passing the
+    # object directly to localStorage.setItem coerces it to "[object Object]".
+    payload = json.dumps(
+        json.dumps(st.session_state.all_chats, ensure_ascii=False)
+    ).replace("</", "<\\/")
     html = f"""
     <script>
     (function () {{
@@ -683,7 +765,9 @@ def render_chat_persistence_bridge():
 
 def persist_chats_localstorage():
     """Write the current chats into the browser's localStorage."""
-    payload = json.dumps(st.session_state.all_chats).replace("</", "<\\/")
+    payload = json.dumps(
+        json.dumps(st.session_state.all_chats, ensure_ascii=False)
+    ).replace("</", "<\\/")
     html = f"""
     <script>
     try {{
@@ -735,49 +819,27 @@ with st.sidebar:
         st.session_state.chat_upload_sigs.pop("draft", None)
         st.rerun()
 
-    st.markdown('<div class="side-title">Chats</div>', unsafe_allow_html=True)
-    chat_ids = list(reversed(list(st.session_state.all_chats.keys())))
-    if chat_ids:
-        for chat_id in chat_ids:
-            is_active = st.session_state.current_chat == chat_id
-            row = st.columns([0.86, 0.14])
-            with row[0]:
-                marker = "● " if is_active else "   "
-                label = f"{marker}{format_chat_title(chat_id)}"
-                if st.button(label, key=f"chat_{chat_id}", use_container_width=True):
-                    st.session_state.current_chat = chat_id
-                    st.session_state.draft_messages = []
-                    st.session_state.draft_store = None
-                    st.rerun()
-            with row[1]:
-                if st.button("✕", key=f"del_{chat_id}", help="Delete chat", use_container_width=True):
-                    st.session_state.all_chats.pop(chat_id, None)
-                    st.session_state.chat_stores.pop(chat_id, None)
-                    st.session_state.chat_upload_sigs.pop(chat_id, None)
-                    save_chats()
-                    if st.session_state.current_chat == chat_id:
-                        st.session_state.current_chat = None
-                        st.session_state.draft_messages = []
-                        st.session_state.draft_store = None
-                    st.rerun()
-    else:
-        st.caption("No conversations yet.")
-
-    st.markdown('<div class="side-divider"></div>', unsafe_allow_html=True)
-    with st.expander("Upload Documents", expanded=True):
-        uploaded_files = st.file_uploader(
-            "Upload Documents",
-            type=["pdf", "png", "jpg", "jpeg", "docx", "txt", "csv"],
-            accept_multiple_files=True,
-            label_visibility="collapsed",
-            key=f"doc_uploader_{st.session_state.current_chat}",
-        )
-        st.caption("PDF · Word · Text · CSV · Images")
+    uploaded_files = st.file_uploader(
+        "Upload documents",
+        type=["pdf", "png", "jpg", "jpeg", "docx", "txt", "csv"],
+        accept_multiple_files=True,
+        key=f"doc_uploader_{st.session_state.current_chat}",
+    )
+    st.caption("PDF · Word · Text · CSV · Images")
 
     store = get_document_store()
     if store is None and st.session_state.current_chat:
         chat_meta = st.session_state.all_chats.get(st.session_state.current_chat) or {}
-        if chat_meta.get("corpus"):
+        try:
+            store = persistent_chat_store(st.session_state.current_chat)
+            if store.source_count() > 0:
+                st.session_state.chat_stores[st.session_state.current_chat] = store
+            else:
+                store.close()
+                store = None
+        except Exception as exc:
+            print(f"[storage] Could not reopen chat document store: {exc}", file=sys.stderr)
+        if store is None and chat_meta.get("corpus"):
             corpus_name = Path(chat_meta["corpus"]).name
             st.caption(f"This transcript was replayed against {corpus_name}.")
             if st.button("Load shared corpus for follow-ups", use_container_width=True):
@@ -798,6 +860,44 @@ with st.sidebar:
             st.session_state.pending_query = "Please provide a comprehensive summary of the uploaded documents."
             st.rerun()
 
+    st.markdown('<div class="side-title">Chats</div>', unsafe_allow_html=True)
+    chat_ids = [
+        chat_id
+        for chat_id in reversed(list(st.session_state.all_chats.keys()))
+        if (
+            st.session_state.all_chats[chat_id].get("messages")
+            or st.session_state.all_chats[chat_id].get("corpus")
+            or st.session_state.all_chats[chat_id].get("document_collection")
+        )
+    ]
+    if chat_ids:
+        for chat_id in chat_ids:
+            is_active = st.session_state.current_chat == chat_id
+            row = st.columns([0.86, 0.14])
+            with row[0]:
+                marker = "● " if is_active else "   "
+                label = f"{marker}{format_chat_title(chat_id)}"
+                if st.button(label, key=f"chat_{chat_id}", use_container_width=True):
+                    st.session_state.current_chat = chat_id
+                    st.session_state.draft_messages = []
+                    st.rerun()
+            with row[1]:
+                if st.button("✕", key=f"del_{chat_id}", help="Delete chat", use_container_width=True):
+                    st.session_state.all_chats.pop(chat_id, None)
+                    removed_store = st.session_state.chat_stores.pop(chat_id, None)
+                    close = getattr(removed_store, "close", None)
+                    if close:
+                        close()
+                    st.session_state.chat_upload_sigs.pop(chat_id, None)
+                    save_chats()
+                    if st.session_state.current_chat == chat_id:
+                        st.session_state.current_chat = None
+                        st.session_state.draft_messages = []
+                        st.session_state.draft_store = None
+                    st.rerun()
+    else:
+        st.caption("No conversations yet.")
+
     st.markdown('<div class="side-divider"></div>', unsafe_allow_html=True)
     if st.session_state.current_chat and st.session_state.all_chats.get(st.session_state.current_chat, {}).get("messages"):
         chat_data = st.session_state.all_chats[st.session_state.current_chat]
@@ -816,6 +916,11 @@ with st.sidebar:
 
 
 if uploaded_files:
+    # Start a real chat before indexing so this upload gets its own durable
+    # collection and evaluation baseline, instead of sharing the draft store.
+    if st.session_state.current_chat is None:
+        create_chat(title="New Chat", messages=st.session_state.draft_messages)
+        st.session_state.draft_messages = []
     sig_key = st.session_state.current_chat or "draft"
     current_signature = tuple(sorted((file.name, file.size) for file in uploaded_files))
     if st.session_state.chat_upload_sigs.get(sig_key) != current_signature:
@@ -825,17 +930,57 @@ if uploaded_files:
             if processed:
                 store = get_document_store()
                 if store is None:
-                    store = SessionVectorStore(get_embeddings(mode="transformer"))
-                    if st.session_state.current_chat:
-                        st.session_state.chat_stores[st.session_state.current_chat] = store
-                    else:
-                        st.session_state.draft_store = store
+                    store = persistent_chat_store(st.session_state.current_chat)
+                    st.session_state.chat_stores[st.session_state.current_chat] = store
 
                 total_chunks = 0
                 for source, docs in processed:
                     chunks = chunk_data(docs)
                     result = store.add_documents(chunks, source_name=source)
                     total_chunks += result.get("chunk_count", 0)
+
+                # Build and persist the retrieval baseline after indexing. Keep
+                # evaluation failures isolated so a successful upload remains usable.
+                try:
+                    prior_baseline = (
+                        store.get_evaluation_baseline()
+                        if isinstance(store, QdrantKnowledgeBase) else None
+                    )
+                    new_sources = list(dict.fromkeys(source for source, _docs in processed))
+                    new_document_cases = store.evaluation_questions(source_names=new_sources)
+                    new_document_results = score_retrieval_cases(store, new_document_cases)
+                    if prior_baseline:
+                        regression_results = score_retrieval_cases(
+                            store, prior_baseline.get("results", [])
+                        )
+                    else:
+                        regression_results = score_retrieval_cases(
+                            store, store.evaluation_questions()
+                        )
+
+                    if regression_results and isinstance(store, QdrantKnowledgeBase):
+                        if prior_baseline:
+                            store.save_evaluation_comparison(
+                                regression_results, new_document_results=new_document_results
+                            )
+                        else:
+                            store.save_evaluation_baseline(regression_results)
+                    elif regression_results:
+                        st.session_state[
+                            f"eval_baseline_{st.session_state.current_chat or 'draft'}"
+                        ] = {
+                            "results": regression_results,
+                            "mean_keyword_coverage": round(
+                                sum(row["recall"] for row in regression_results) / len(regression_results), 4
+                            ),
+                        }
+                    if new_document_results:
+                        print(
+                            f"[evaluation] Checked {len(new_document_results)} question(s) "
+                            f"from newly uploaded source(s): {', '.join(new_sources)}"
+                        )
+                except Exception as exc:
+                    print(f"[evaluation] Automatic upload baseline failed: {exc}", file=sys.stderr)
 
                 # Only remember the signature after a successful ingest, so a
                 # failed upload (e.g. a missing loader dependency) can be

@@ -1,7 +1,7 @@
 import math
 import uuid
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
 from langchain_core.documents import Document
 
@@ -62,11 +62,15 @@ class SessionVectorStore:
         self._source_order.append(source_id)
         return self._sources[source_id]
 
-    def similarity_search(self, query: str, k: int = 4) -> List[Document]:
+    def similarity_search(
+        self, query: str, k: int = 4, source_name: Optional[str] = None
+    ) -> List[Document]:
         query_vector = self.embeddings.embed_query(query)
         query_norm = math.sqrt(sum(value * value for value in query_vector))
         scored = []
         for doc, vector, _source_id in self._entries:
+            if source_name is not None and (doc.metadata or {}).get("source") != source_name:
+                continue
             # Cosine, not raw dot product: transformer embeddings are not
             # guaranteed to be unit-normalised, and the ranking must not depend
             # on vector magnitude.
@@ -88,6 +92,28 @@ class SessionVectorStore:
         instead of a hardcoded reference corpus.
         """
         return [doc.page_content for doc, _vector, _source_id in self._entries]
+
+    def evaluation_questions(self, per_source: int = 5, source_names=None) -> List[dict]:
+        """Create stable, document-derived checks for an uploaded corpus."""
+        questions = []
+        for source in self.list_sources():
+            if source_names is not None and source["source_name"] not in source_names:
+                continue
+            docs = self.documents_for_source(source["source_name"])
+            text = " ".join(doc.page_content for doc in docs)
+            sentences = [part.strip() for part in __import__("re").split(r"(?<=[.!?])\s+", text) if len(part.split()) >= 6]
+            seen = set()
+            for sentence in sentences:
+                normalized = sentence.lower()
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                words = sentence.split()
+                question = "What does the document state about " + " ".join(words[:7]).strip(" ,.;:") + "?"
+                questions.append({"question": question, "source": source["source_name"], "expected": sentence})
+                if sum(q["source"] == source["source_name"] for q in questions) >= per_source:
+                    break
+        return questions
 
     def documents_for_source(self, source_name: str) -> List[Document]:
         """Return the stored chunks that belong to one source.
