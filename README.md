@@ -1,4 +1,4 @@
-# LLMOps: Production RAG Evaluation, Guardrails & Observability Platform
+[Project_Report.docx](https://github.com/user-attachments/files/34125030/Project_Report.docx)# LLMOps: Production RAG Evaluation, Guardrails & Observability Platform
 
 [![LLMOps CI/CD Quality Gate](https://img.shields.io/badge/CI%2FCD-Quality%20Gate%20Passing-success)](.github/workflows/llmops_ci.yml)
 [![MLOps Track](https://img.shields.io/badge/AIM4142-Fast%20Learners%20Project-blue)]()
@@ -154,5 +154,4 @@ cutoff-consistent hallucination rates.
 ---
 
 ## 📄 Submission Documents
-- **Complete Academic Report:** [Project_Report.docx]([Project_Report.docx](https://github.com/user-attachments/files/34124984/Project_Report.docx)
-)
+- **Complete Academic Report:** [Project_Report.docx](https://github.com/user-attachments/files/34125039/Project_Report.docx)
